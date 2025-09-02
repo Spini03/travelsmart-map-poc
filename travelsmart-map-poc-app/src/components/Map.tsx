@@ -1,14 +1,10 @@
 "use client";
 
 import React, { useMemo, useState, useCallback } from "react";
-import Map, { Popup } from "react-map-gl/mapbox";
-import {
-  DeckGL,
-  ScatterplotLayer,
-  ArcLayer,
-  TextLayer,
-  PickingInfo,
-} from "deck.gl";
+import Map, { Popup, useControl } from "react-map-gl/mapbox";
+import { ScatterplotLayer, ArcLayer, TextLayer } from "@deck.gl/layers";
+import type { PickingInfo } from "@deck.gl/core";
+import { MapboxOverlay } from "@deck.gl/mapbox";
 import "mapbox-gl/dist/mapbox-gl.css";
 import type { Destination } from "./ItinerarySidebar";
 
@@ -52,12 +48,10 @@ export default function MapComponent({
 
   const layers = useMemo(() => {
     // build arcs data from ordered itinerary
-    const arcsData = itinerary
-      .slice(0, -1)
-      .map((city, i) => ({
-        from: city.coordinates,
-        to: itinerary[i + 1].coordinates,
-      }));
+    const arcsData = itinerary.slice(0, -1).map((city, i) => ({
+      from: city.coordinates,
+      to: itinerary[i + 1].coordinates,
+    }));
 
     const isSelected = (d: Destination) =>
       selectedId ? d.id === selectedId : false;
@@ -111,9 +105,8 @@ export default function MapComponent({
         mapStyle="mapbox://styles/mapbox/dark-v11"
         mapboxAccessToken={MAPBOX_ACCESS_TOKEN ?? ""}
       >
-        <DeckGL
+        <DeckOverlay
           layers={layers}
-          controller={true}
           getTooltip={(info) =>
             info.object
               ? {
@@ -180,4 +173,23 @@ export default function MapComponent({
       </Map>
     </div>
   );
+}
+
+// Mapbox-integrated deck.gl overlay that doesn't block map interactions
+function DeckOverlay({
+  layers,
+  getTooltip,
+}: {
+  layers: any[];
+  getTooltip?: (info: any) => any;
+}) {
+  const overlay = useControl(
+    () => new MapboxOverlay({ interleaved: true, getTooltip }),
+    { position: "top-left" }
+  );
+  // Update layers and tooltip when props change
+  React.useEffect(() => {
+    overlay.setProps({ layers, getTooltip });
+  }, [overlay, layers, getTooltip]);
+  return null;
 }
