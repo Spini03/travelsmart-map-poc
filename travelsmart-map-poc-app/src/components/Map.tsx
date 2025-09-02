@@ -54,7 +54,8 @@ export default function MapComponent({
     const tileLayer = new TileLayer({
       id: "base-map-layer",
       // ESRI World Imagery (generous dev usage, CORS enabled)
-      data: "https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+      // CARTO Voyager raster tiles with labels/borders/cities (CORS enabled)
+      data: "https://a.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png",
       minZoom: 0,
       maxZoom: 19,
       tileSize: 256,
@@ -129,7 +130,8 @@ export default function MapComponent({
         getSize: 14,
         sizeUnits: "pixels",
         sizeScale: 1,
-        getColor: [255, 255, 255],
+        // Dark labels read better on light basemap
+        getColor: [20, 20, 20],
         getTextAnchor: "middle",
         getAlignmentBaseline: "center",
         getPixelOffset: [0, 0],
