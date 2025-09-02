@@ -47,7 +47,6 @@ export default function Home() {
   };
 
   const handleSelect = (id: number) => setSelectedId(id);
-  const handleClearSelection = () => setSelectedId(null);
 
   return (
     <main className="h-[100dvh] grid grid-cols-[360px_1fr]">
@@ -59,12 +58,11 @@ export default function Home() {
         onReorder={handleReorder}
         onSelect={handleSelect}
       />
-      <div className="relative">
+      <div className="relative h-full">
         <MapComponent
           itinerary={itinerary}
           selectedId={selectedId}
           onSelect={handleSelect}
-          onClearSelection={handleClearSelection}
         />
       </div>
     </main>
