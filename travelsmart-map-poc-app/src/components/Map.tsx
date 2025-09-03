@@ -1,19 +1,9 @@
 "use client";
 
 import React, { useMemo, useState, useCallback } from "react";
-import DeckGL from "@deck.gl/react";
-import {
-  ScatterplotLayer,
-  ArcLayer,
-  TextLayer,
-  BitmapLayer,
-} from "@deck.gl/layers";
-import { TileLayer } from "@deck.gl/geo-layers";
-import {
-  COORDINATE_SYSTEM,
-  _GlobeView as GlobeView,
-  type PickingInfo,
-} from "@deck.gl/core";
+import Map, { Source, Layer, Popup } from "react-map-gl/mapbox";
+import type { GeoJSONFeature, Map as MbMap } from "mapbox-gl";
+import type { Feature, FeatureCollection, LineString, Point } from "geojson";
 import type { Destination } from "./ItinerarySidebar";
 
 type Props = {
@@ -27,153 +17,247 @@ export default function MapComponent({
   selectedId,
   onSelect,
 }: Props) {
-  const initialViewState = {
-    longitude: itinerary[0]?.coordinates[0] ?? 0,
-    latitude: itinerary[0]?.coordinates[1] ?? 20,
-    zoom: 0.5,
-    bearing: 0,
-    pitch: 0,
-  } as const;
+  const initialViewState = useMemo(
+    () =>
+      ({
+        longitude: itinerary[0]?.coordinates[0] ?? 0,
+        latitude: itinerary[0]?.coordinates[1] ?? 20,
+        zoom: 1.4,
+        bearing: 0,
+        pitch: 0,
+      } as const),
+    [itinerary]
+  );
 
-  const [clickInfo, setClickInfo] = useState<PickingInfo | null>(null);
+  // Great-circle interpolation between two lon/lat points
+  const greatCircle = useCallback(
+    (
+      from: [number, number],
+      to: [number, number],
+      steps = 64
+    ): [number, number][] => {
+      const toRad = (d: number) => (d * Math.PI) / 180;
+      const toDeg = (r: number) => (r * 180) / Math.PI;
+      const [lon1, lat1] = [toRad(from[0]), toRad(from[1])];
+      const [lon2, lat2] = [toRad(to[0]), toRad(to[1])];
 
-  const handleClick = useCallback(
-    (info: PickingInfo) => {
-      if (info?.object) {
-        const obj = info.object as Destination & { index?: number };
-        onSelect?.(obj.id);
-        setClickInfo(info);
+      // Convert to 3D unit vectors
+      const xyz = (lon: number, lat: number) =>
+        [
+          Math.cos(lat) * Math.cos(lon),
+          Math.cos(lat) * Math.sin(lon),
+          Math.sin(lat),
+        ] as const;
+      const a = xyz(lon1, lat1);
+      const b = xyz(lon2, lat2);
+
+      // Angle between vectors
+      const dot = a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+      const omega = Math.acos(Math.min(1, Math.max(-1, dot)));
+      if (omega === 0) return [from, to];
+
+      const coords: [number, number][] = [];
+      for (let i = 0; i <= steps; i++) {
+        const t = i / steps;
+        const sin_omega = Math.sin(omega);
+        const k1 = Math.sin((1 - t) * omega) / sin_omega;
+        const k2 = Math.sin(t * omega) / sin_omega;
+        const x = k1 * a[0] + k2 * b[0];
+        const y = k1 * a[1] + k2 * b[1];
+        const z = k1 * a[2] + k2 * b[2];
+        const r = Math.sqrt(x * x + y * y + z * z);
+        const lon = Math.atan2(y / r, x / r);
+        const lat = Math.asin(z / r);
+        coords.push([toDeg(lon), toDeg(lat)]);
+      }
+      return coords;
+    },
+    []
+  );
+
+  const pointsGeoJSON = useMemo<FeatureCollection<Point>>(() => {
+    return {
+      type: "FeatureCollection",
+      features: itinerary.map(
+        (d, i): Feature<Point> => ({
+          type: "Feature",
+          geometry: { type: "Point", coordinates: d.coordinates },
+          properties: {
+            id: d.id,
+            city: d.city,
+            days: d.days,
+            order: i + 1,
+            selected: selectedId ? d.id === selectedId : false,
+          },
+        })
+      ),
+    };
+  }, [itinerary, selectedId]);
+
+  const arcsGeoJSON = useMemo<FeatureCollection<LineString>>(() => {
+    if (itinerary.length < 2)
+      return {
+        type: "FeatureCollection",
+        features: [] as Feature<LineString>[],
+      };
+    return {
+      type: "FeatureCollection",
+      features: itinerary.slice(0, -1).map(
+        (d, i): Feature<LineString> => ({
+          type: "Feature",
+          geometry: {
+            type: "LineString",
+            coordinates: greatCircle(
+              d.coordinates,
+              itinerary[i + 1].coordinates,
+              96
+            ),
+          },
+          properties: { fromId: d.id, toId: itinerary[i + 1].id },
+        })
+      ),
+    };
+  }, [itinerary, greatCircle]);
+
+  const [popup, setPopup] = useState<{
+    lngLat: [number, number];
+    city: string;
+    days: number;
+    id: number;
+  } | null>(null);
+
+  type ClickEvent = {
+    features?: GeoJSONFeature[];
+    lngLat: { lng: number; lat: number };
+  };
+
+  const onMapClick = useCallback(
+    (e: ClickEvent) => {
+      const feature = e.features && e.features[0];
+      if (feature && feature.properties) {
+        const props = feature.properties as unknown as {
+          id: string | number;
+          city: string;
+          days: string | number;
+        };
+        const id = Number(props.id);
+        const city = String(props.city);
+        const days = Number(props.days);
+        onSelect?.(id);
+        setPopup({ lngLat: [e.lngLat.lng, e.lngLat.lat], city, days, id });
       } else {
-        setClickInfo(null);
+        setPopup(null);
       }
     },
     [onSelect]
   );
 
-  const layers = useMemo(() => {
-    const tileLayer = new TileLayer({
-      id: "base-map-layer",
-      // ESRI World Imagery (generous dev usage, CORS enabled)
-      // CARTO Voyager raster tiles with labels/borders/cities (CORS enabled)
-      data: "https://a.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png",
-      minZoom: 0,
-      maxZoom: 19,
-      tileSize: 256,
-      loadOptions: {
-        image: { type: "imagebitmap" },
-        fetch: { mode: "cors", credentials: "omit" },
-      },
-      renderSubLayers: (subProps) => {
-        const bbox: any = (subProps as any).tile?.bbox;
-        const bounds: [number, number, number, number] = Array.isArray(bbox)
-          ? [bbox[0], bbox[1], bbox[2], bbox[3]]
-          : [bbox.west, bbox.south, bbox.east, bbox.north];
-        return new BitmapLayer(subProps, {
-          id: `${subProps.id}-bitmap`,
-          // IMPORTANT: override data to avoid treating image as iterable
-          data: undefined,
-          image: (subProps as any).data,
-          bounds,
-          opacity: 1,
-        });
-      },
-    });
+  const rawToken = process.env.NEXT_PUBLIC_MAPBOX_ACCESS_TOKEN;
+  const token =
+    rawToken &&
+    rawToken !== "SET_YOUR_TOKEN_OR_LEAVE_EMPTY" &&
+    rawToken.trim().length > 0 &&
+    rawToken.startsWith("pk.")
+      ? rawToken
+      : null;
+  type FogOpts = {
+    range?: [number, number];
+    color?: string;
+    "horizon-blend"?: number;
+  };
 
-    const arcsData =
-      itinerary.length > 1
-        ? itinerary.slice(0, -1).map((city, i) => {
-            const a = city.coordinates;
-            const b = itinerary[i + 1].coordinates;
-            return {
-              from: [a[0], a[1]] as [number, number],
-              to: [b[0], b[1]] as [number, number],
-            };
-          })
-        : [];
-
-    const isSelected = (d: Destination) =>
-      selectedId ? d.id === selectedId : false;
-
-    return [
-      tileLayer,
-      new ScatterplotLayer<Destination>({
-        id: "points",
-        data: itinerary,
-        pickable: true,
-        getPosition: (d) => d.coordinates,
-        getRadius: (d) => (isSelected(d) ? 9 : 7),
-        radiusUnits: "pixels",
-        getFillColor: (d) => (isSelected(d) ? [58, 165, 255] : [29, 161, 242]),
-        getLineColor: [0, 0, 0, 120],
-        lineWidthMinPixels: 1,
-        onClick: handleClick,
-        coordinateSystem: COORDINATE_SYSTEM.LNGLAT,
-      }),
-      new ArcLayer({
-        id: "arc-layer",
-        data: arcsData,
-        getSourcePosition: (d: { from: [number, number] }) => d.from,
-        getTargetPosition: (d: { to: [number, number] }) => d.to,
-        getSourceColor: [100, 200, 255, 160],
-        getTargetColor: [100, 200, 255, 160],
-        getWidth: 2,
-        greatCircle: true,
-        pickable: false,
-        coordinateSystem: COORDINATE_SYSTEM.LNGLAT,
-      }),
-      new TextLayer<Destination & { order: number }>({
-        id: "labels",
-        data: itinerary.map((d, i) => ({ ...d, order: i + 1 })),
-        pickable: false,
-        getPosition: (d) => d.coordinates,
-        getText: (d) => String(d.order),
-        getSize: 14,
-        sizeUnits: "pixels",
-        sizeScale: 1,
-        // Dark labels read better on light basemap
-        getColor: [20, 20, 20],
-        getTextAnchor: "middle",
-        getAlignmentBaseline: "center",
-        getPixelOffset: [0, 0],
-        coordinateSystem: COORDINATE_SYSTEM.LNGLAT,
-      }),
-    ];
-  }, [itinerary, selectedId, handleClick]);
+  const handleMapLoad = useCallback((e: { target: MbMap }) => {
+    // Ensure globe projection and add subtle atmosphere for contrast
+    try {
+      e.target.setProjection("globe");
+      e.target.setFog({
+        range: [0.5, 10],
+        color: "rgba(255,255,255,0.25)",
+        "horizon-blend": 0.2,
+      } as FogOpts);
+    } catch {}
+  }, []);
 
   return (
     <div className="absolute inset-0" style={{ background: "#000020" }}>
-      <DeckGL
-        layers={layers}
-        views={new GlobeView({ id: "globe" })}
-        controller={true}
-        initialViewState={initialViewState}
-        getTooltip={(info) =>
-          info.object
-            ? {
-                text: `${(info.object as Destination).city} — ${
-                  (info.object as Destination).days
-                } day(s)`,
-              }
-            : null
-        }
-      />
-
-      {clickInfo && clickInfo.object && (
-        <div
-          className="absolute z-10 rounded bg-black/80 text-white text-xs shadow p-2"
-          style={{
-            left: clickInfo.x,
-            top: clickInfo.y,
-            transform: "translate(8px, 8px)",
-          }}
-          onClick={() => setClickInfo(null)}
+      {token ? (
+        <Map
+          mapboxAccessToken={token}
+          initialViewState={initialViewState}
+          projection="globe"
+          mapStyle="mapbox://styles/mapbox/light-v11"
+          interactiveLayerIds={["points-circle"]}
+          onClick={onMapClick}
+          onLoad={handleMapLoad}
+          dragRotate={false}
+          style={{ width: "100%", height: "100%" }}
         >
-          <div className="font-semibold">
-            {(clickInfo.object as Destination).city}
-          </div>
-          <div className="text-neutral-300">
-            Days: {(clickInfo.object as Destination).days}
-          </div>
+          {/* Points */}
+          <Source id="points" type="geojson" data={pointsGeoJSON}>
+            <Layer
+              id="points-circle"
+              type="circle"
+              paint={{
+                "circle-radius": ["case", ["get", "selected"], 9, 7],
+                "circle-color": [
+                  "case",
+                  ["get", "selected"],
+                  "#3AA5FF",
+                  "#1DA1F2",
+                ],
+                "circle-stroke-color": "rgba(0,0,0,0.5)",
+                "circle-stroke-width": 1,
+              }}
+            />
+            {/* Numeric order labels */}
+            <Layer
+              id="points-labels"
+              type="symbol"
+              layout={{
+                "text-field": ["to-string", ["get", "order"]],
+                "text-font": ["Open Sans Bold", "Arial Unicode MS Bold"],
+                "text-size": 12,
+                "text-offset": [0, 0],
+                "text-anchor": "center",
+                "text-allow-overlap": true,
+              }}
+              paint={{ "text-color": "#141414" }}
+            />
+          </Source>
+
+          {/* Great-circle arcs between consecutive points */}
+          <Source id="arcs" type="geojson" data={arcsGeoJSON}>
+            <Layer
+              id="arcs-line"
+              type="line"
+              paint={{
+                "line-color": "rgba(100,200,255,0.8)",
+                "line-width": 2,
+              }}
+            />
+          </Source>
+
+          {popup && (
+            <Popup
+              longitude={popup.lngLat[0]}
+              latitude={popup.lngLat[1]}
+              anchor="bottom-left"
+              closeOnClick={false}
+              onClose={() => setPopup(null)}
+              offset={8}
+              className="!p-0 !bg-transparent !shadow-none"
+            >
+              <div className="rounded bg-black/80 text-white text-xs shadow p-2">
+                <div className="font-semibold">{popup.city}</div>
+                <div className="text-neutral-300">Days: {popup.days}</div>
+              </div>
+            </Popup>
+          )}
+        </Map>
+      ) : (
+        <div className="w-full h-full grid place-items-center text-sm text-neutral-300 p-4">
+          Set NEXT_PUBLIC_MAPBOX_ACCESS_TOKEN in your environment to display the
+          map.
         </div>
       )}
     </div>
