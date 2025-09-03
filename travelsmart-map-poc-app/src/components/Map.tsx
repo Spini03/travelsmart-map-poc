@@ -185,7 +185,7 @@ export default function MapComponent({
           mapboxAccessToken={token}
           initialViewState={initialViewState}
           projection="globe"
-          mapStyle="mapbox://styles/mapbox/light-v11"
+          mapStyle="mapbox://styles/luisalberto2003/cmf34lq88002e01s21z3o2ep0"
           interactiveLayerIds={["points-circle"]}
           onClick={onMapClick}
           onLoad={handleMapLoad}
@@ -194,19 +194,43 @@ export default function MapComponent({
         >
           {/* Points */}
           <Source id="points" type="geojson" data={pointsGeoJSON}>
+            {/* Subtle drop shadow */}
+            <Layer
+              id="points-shadow"
+              type="circle"
+              paint={{
+                "circle-radius": ["case", ["get", "selected"], 13, 11],
+                "circle-color": "#000000",
+                "circle-opacity": 0.12,
+                "circle-blur": 0.4,
+                "circle-translate": [0, 1],
+                "circle-translate-anchor": "viewport",
+              }}
+            />
+            {/* Soft glow underlay */}
+            <Layer
+              id="points-glow"
+              type="circle"
+              paint={{
+                "circle-radius": ["case", ["get", "selected"], 16, 14],
+                "circle-color": "#10B981",
+                "circle-opacity": 0.1,
+              }}
+            />
+            {/* White badge with green ring (click target) */}
             <Layer
               id="points-circle"
               type="circle"
               paint={{
-                "circle-radius": ["case", ["get", "selected"], 9, 7],
-                "circle-color": [
+                "circle-radius": ["case", ["get", "selected"], 12, 10],
+                "circle-color": "#ffffff",
+                "circle-stroke-color": [
                   "case",
                   ["get", "selected"],
-                  "#3AA5FF",
-                  "#1DA1F2",
+                  "#10B981" /* emerald-500 when selected */,
+                  "#E5E7EB" /* neutral-200 otherwise */,
                 ],
-                "circle-stroke-color": "rgba(0,0,0,0.5)",
-                "circle-stroke-width": 1,
+                "circle-stroke-width": ["case", ["get", "selected"], 2.5, 1.5],
               }}
             />
             {/* Numeric order labels */}
@@ -220,8 +244,14 @@ export default function MapComponent({
                 "text-offset": [0, 0],
                 "text-anchor": "center",
                 "text-allow-overlap": true,
+                "text-ignore-placement": true,
               }}
-              paint={{ "text-color": "#141414" }}
+              paint={{
+                "text-color": "#10B981",
+                "text-halo-color": "#ffffff",
+                "text-halo-width": 2,
+                "text-halo-blur": 0.6,
+              }}
             />
           </Source>
 
