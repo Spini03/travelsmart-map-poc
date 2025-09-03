@@ -260,9 +260,24 @@ export default function MapComponent({
             <Layer
               id="arcs-line"
               type="line"
+              layout={{
+                "line-cap": "round",
+                "line-join": "round",
+              }}
               paint={{
-                "line-color": "rgba(100,200,255,0.8)",
-                "line-width": 2,
+                "line-color": "#9CA3AF", // gray-400
+                "line-width": 2.25,
+                "line-opacity": 0.9,
+                // Zoom-aware dotted pattern; small round dashes read as dots
+                "line-dasharray": [
+                  "step",
+                  ["zoom"],
+                  ["literal", [0.25, 2.4]],
+                  6,
+                  ["literal", [0.35, 2.6]],
+                  10,
+                  ["literal", [0.5, 3.0]],
+                ],
               }}
             />
           </Source>
