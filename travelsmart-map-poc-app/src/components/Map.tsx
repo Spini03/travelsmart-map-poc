@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useMemo, useState, useCallback } from "react";
+import React, { useMemo, useState, useCallback, useEffect } from "react";
 import Map, { Source, Layer, Popup } from "react-map-gl/mapbox";
 import type { GeoJSONFeature, Map as MbMap } from "mapbox-gl";
 import type { Feature, FeatureCollection, LineString, Point } from "geojson";
@@ -160,6 +160,45 @@ export default function MapComponent({
     rawToken.startsWith("pk.")
       ? rawToken
       : null;
+
+  // Track visited countries (ISO-2 codes, e.g., 'ES', 'FR')
+  const [visitedIso2, setVisitedIso2] = useState<string[]>([]);
+
+  // Resolve country ISO codes for each destination via Mapbox Geocoding (types=country)
+  useEffect(() => {
+    if (!token || itinerary.length === 0) {
+      setVisitedIso2([]);
+      return;
+    }
+    let cancelled = false;
+    const fetchCountries = async () => {
+      const codes = new Set<string>();
+      for (const d of itinerary) {
+        const [lng, lat] = d.coordinates;
+        try {
+          const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${lng},${lat}.json?types=country&access_token=${token}`;
+          const res = await fetch(url);
+          if (!res.ok) continue;
+          const json = await res.json();
+          const short: string | undefined =
+            json?.features?.[0]?.properties?.short_code;
+          if (short) {
+            // short_code can be like 'gb' or 'gb-eng' -> take first segment and uppercase
+            const iso2 = short.split("-")[0].toUpperCase();
+            if (iso2.length === 2) codes.add(iso2);
+          }
+        } catch {
+          // ignore individual failures
+        }
+        if (cancelled) return;
+      }
+      if (!cancelled) setVisitedIso2(Array.from(codes));
+    };
+    fetchCountries();
+    return () => {
+      cancelled = true;
+    };
+  }, [itinerary, token]);
   type FogOpts = {
     range?: [number, number];
     color?: string;
@@ -192,6 +231,44 @@ export default function MapComponent({
           dragRotate={false}
           style={{ width: "100%", height: "100%" }}
         >
+          {/* Visited countries highlight (beneath routes and points) */}
+          <Source
+            id="country-bounds"
+            type="vector"
+            url="mapbox://mapbox.country-boundaries-v1"
+          >
+            <Layer
+              id="visited-countries-fill"
+              type="fill"
+              source-layer="country_boundaries"
+              filter={[
+                "any",
+                ["in", ["get", "iso_3166_1"], ["literal", visitedIso2]],
+                ["in", ["get", "iso_3166_1_alpha_2"], ["literal", visitedIso2]],
+              ]}
+              paint={{
+                "fill-color": "#10B981",
+                "fill-opacity": 0.16,
+              }}
+            />
+            <Layer
+              id="visited-countries-outline"
+              type="line"
+              source-layer="country_boundaries"
+              filter={[
+                "any",
+                ["in", ["get", "iso_3166_1"], ["literal", visitedIso2]],
+                ["in", ["get", "iso_3166_1_alpha_2"], ["literal", visitedIso2]],
+              ]}
+              layout={{ "line-join": "round" }}
+              paint={{
+                "line-color": "#10B981",
+                "line-opacity": 0.35,
+                "line-width": 1.0,
+              }}
+            />
+          </Source>
+
           {/* Points */}
           <Source id="points" type="geojson" data={pointsGeoJSON}>
             {/* Subtle drop shadow */}
