@@ -9,8 +9,20 @@ import ItinerarySidebar, {
 export default function Home() {
   const initialItinerary = useMemo<Destination[]>(
     () => [
-      { id: 1, city: "Madrid", coordinates: [-3.7038, 40.4168], days: 2 },
-      { id: 2, city: "París", coordinates: [2.3522, 48.8566], days: 3 },
+      {
+        id: 1,
+        city: "Madrid",
+        coordinates: [-3.7038, 40.4168],
+        days: 2,
+        transportToNext: "car",
+      },
+      {
+        id: 2,
+        city: "París",
+        coordinates: [2.3522, 48.8566],
+        days: 3,
+        transportToNext: "plane",
+      },
       { id: 3, city: "Ámsterdam", coordinates: [4.8952, 52.3702], days: 2 },
       { id: 4, city: "Roma", coordinates: [12.4964, 41.9028], days: 4 },
     ],

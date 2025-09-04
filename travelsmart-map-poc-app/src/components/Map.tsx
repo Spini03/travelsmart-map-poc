@@ -94,30 +94,105 @@ export default function MapComponent({
     };
   }, [itinerary, selectedId]);
 
-  const arcsGeoJSON = useMemo<FeatureCollection<LineString>>(() => {
-    if (itinerary.length < 2)
-      return {
-        type: "FeatureCollection",
-        features: [] as Feature<LineString>[],
-      };
-    return {
-      type: "FeatureCollection",
-      features: itinerary.slice(0, -1).map(
-        (d, i): Feature<LineString> => ({
-          type: "Feature",
-          geometry: {
-            type: "LineString",
-            coordinates: greatCircle(
-              d.coordinates,
-              itinerary[i + 1].coordinates,
-              96
-            ),
-          },
-          properties: { fromId: d.id, toId: itinerary[i + 1].id },
-        })
-      ),
+  // Mapbox token
+  const rawToken = process.env.NEXT_PUBLIC_MAPBOX_ACCESS_TOKEN;
+  const token =
+    rawToken &&
+    rawToken !== "SET_YOUR_TOKEN_OR_LEAVE_EMPTY" &&
+    rawToken.trim().length > 0 &&
+    rawToken.startsWith("pk.")
+      ? rawToken
+      : null;
+
+  // Build leg routes (Directions for road-following; great-circle otherwise)
+  const [routesGeoJSON, setRoutesGeoJSON] = useState<
+    FeatureCollection<LineString>
+  >({
+    type: "FeatureCollection",
+    features: [],
+  });
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const toProfile = (t?: string) => {
+      switch (t) {
+        case "car":
+          return "driving";
+        case "walk":
+          return "walking";
+        case "bike":
+          return "cycling";
+        // train/plane not supported by Directions → fall back to great-circle
+        default:
+          return null;
+      }
     };
-  }, [itinerary, greatCircle]);
+
+    const fetchLeg = async (
+      from: [number, number],
+      to: [number, number],
+      transport?: string
+    ): Promise<[number, number][]> => {
+      const profile = toProfile(transport);
+      if (!token || !profile) {
+        return greatCircle(from, to, 96);
+      }
+
+      const url = `https://api.mapbox.com/directions/v5/mapbox/${profile}/${from[0]},${from[1]};${to[0]},${to[1]}?geometries=geojson&overview=full&access_token=${token}`;
+      try {
+        const res = await fetch(url);
+        if (!res.ok) return greatCircle(from, to, 96);
+        const json = await res.json();
+        const coords: [number, number][] =
+          json?.routes?.[0]?.geometry?.coordinates ?? [];
+        return coords.length ? coords : greatCircle(from, to, 96);
+      } catch {
+        return greatCircle(from, to, 96);
+      }
+    };
+
+    const build = async () => {
+      if (itinerary.length < 2) {
+        if (!cancelled)
+          setRoutesGeoJSON({ type: "FeatureCollection", features: [] });
+        return;
+      }
+
+      const legs = itinerary.slice(0, -1).map((d, i) => {
+        const next = itinerary[i + 1];
+        const transport = (d as Destination).transportToNext; // optional
+        return { from: d, to: next, transport };
+      });
+
+      const coordsList = await Promise.all(
+        legs.map((leg) =>
+          fetchLeg(leg.from.coordinates, leg.to.coordinates, leg.transport)
+        )
+      );
+
+      if (cancelled) return;
+
+      const features = legs.map(
+        (leg, i): Feature<LineString> => ({
+          type: "Feature",
+          geometry: { type: "LineString", coordinates: coordsList[i] },
+          properties: {
+            fromId: leg.from.id,
+            toId: leg.to.id,
+            transport: leg.transport ?? "unknown",
+          },
+        })
+      );
+
+      setRoutesGeoJSON({ type: "FeatureCollection", features });
+    };
+
+    build();
+    return () => {
+      cancelled = true;
+    };
+  }, [itinerary, token, greatCircle]);
 
   const [popup, setPopup] = useState<{
     lngLat: [number, number];
@@ -151,15 +226,6 @@ export default function MapComponent({
     },
     [onSelect]
   );
-
-  const rawToken = process.env.NEXT_PUBLIC_MAPBOX_ACCESS_TOKEN;
-  const token =
-    rawToken &&
-    rawToken !== "SET_YOUR_TOKEN_OR_LEAVE_EMPTY" &&
-    rawToken.trim().length > 0 &&
-    rawToken.startsWith("pk.")
-      ? rawToken
-      : null;
 
   // Track visited countries (ISO-2 codes, e.g., 'ES', 'FR')
   const [visitedIso2, setVisitedIso2] = useState<string[]>([]);
@@ -333,18 +399,54 @@ export default function MapComponent({
           </Source>
 
           {/* Great-circle arcs between consecutive points */}
-          <Source id="arcs" type="geojson" data={arcsGeoJSON}>
+          <Source id="arcs" type="geojson" data={routesGeoJSON}>
+            {/* Solid arcs for defined transport (color by transport) */}
             <Layer
-              id="arcs-line"
+              id="arcs-line-transport"
               type="line"
+              filter={[
+                "all",
+                ["has", "transport"],
+                ["!=", ["get", "transport"], "unknown"],
+              ]}
               layout={{
                 "line-cap": "round",
                 "line-join": "round",
               }}
               paint={{
-                "line-color": "#9CA3AF", // gray-400
-                "line-width": 2.25,
-                "line-opacity": 0.9,
+                "line-color": [
+                  "match",
+                  ["get", "transport"],
+                  "car",
+                  "#ff2a6d",
+                  "walk",
+                  "#16a34a",
+                  "bike",
+                  "#0ea5e9",
+                  "train",
+                  "#8b5cf6",
+                  "plane",
+                  "#f59e0b",
+                  "#ff2a6d",
+                ],
+                "line-width": 2.75,
+                "line-opacity": 0.95,
+              }}
+            />
+
+            {/* Dotted arcs for unknown transport (rendered above solid to ensure visibility) */}
+            <Layer
+              id="arcs-line"
+              type="line"
+              filter={["==", ["get", "transport"], "unknown"]}
+              layout={{
+                "line-cap": "round",
+                "line-join": "round",
+              }}
+              paint={{
+                "line-color": "#4b5563", // gray-600 darker dotted line
+                "line-width": 2.75,
+                "line-opacity": 0.95,
                 // Zoom-aware dotted pattern; small round dashes read as dots
                 "line-dasharray": [
                   "step",

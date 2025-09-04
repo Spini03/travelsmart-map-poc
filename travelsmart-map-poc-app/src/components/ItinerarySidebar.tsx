@@ -7,6 +7,8 @@ export type Destination = {
   city: string;
   coordinates: [number, number]; // [lng, lat]
   days: number;
+  // transport used from this destination to the next one (optional)
+  transportToNext?: "car" | "walk" | "bike" | "train" | "plane";
 };
 
 type Props = {
